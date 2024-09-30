@@ -1,8 +1,10 @@
 import functools
+import os
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
 from functorch import (
     combine_state_for_ensemble,
     grad,
@@ -158,3 +160,21 @@ class PerSampleGradWrapper(BenchmarkCase):
 
         loss = functools.partial(compute_loss, fmodel)
         vmap(grad(loss), (None, None, 0, 0))(params, buffers, self.inputs, self.targets)
+
+
+class DDPWrapper(BenchmarkCase):
+    def __init__(self, model_cls, device):
+        self.name_ = f"{model_cls.__name__}_ddp_{device}"
+        self.model = model_cls().to(device)
+        self.inputs = model_cls.make_input().to(device)
+
+        dist.init_process_group(backend='nccl')
+        self.local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(self.local_rank)
+        self.model = DDP(self.model, device_ids=[self.local_rank])
+
+    def name(self):
+        return self.name_
+
+    def run(self):
+        self.model(self.inputs)
